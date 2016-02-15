@@ -159,6 +159,8 @@ VOID DokanCompleteCleanup(__in PIRP_ENTRY IrpEntry,
     FsRtlNotifyCleanup(vcb->NotifySync, &vcb->DirNotifyList, ccb);
   }
 
+  IoRemoveShareAccess(irpSp->FileObject, &fcb->ShareAccess);
+
   DokanCompleteIrpRequest(irp, status, 0);
 
   DDbgPrint("<== DokanCompleteCleanup\n");

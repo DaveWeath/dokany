@@ -282,10 +282,17 @@ typedef struct _DokanFileControlBlock {
   LONG FileCount;
 
   ULONG Flags;
+  SHARE_ACCESS ShareAccess;
 
   UNICODE_STRING FileName;
 
+#if (NTDDI_VERSION < NTDDI_WIN8)
+  //
+  //  The following field is used by the oplock module
+  //  to maintain current oplock information.
+  //
   OPLOCK Oplock;
+#endif
 
   // uint32 ReferenceCount;
   // uint32 OpenHandleCount;
@@ -307,6 +314,17 @@ typedef struct _DokanContextControlBlock {
   int FileCount;
   ULONG MountId;
 } DokanCCB, *PDokanCCB;
+
+//
+//  The following macro is used to retrieve the oplock structure within
+//  the Fcb. This structure was moved to the advanced Fcb header
+//  in Win8.
+//
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+#define DokanGetFcbOplock(F)   &(F)->AdvancedFCBHeader.Oplock
+#else
+#define DokanGetFcbOplock(F)   &(F)->Oplock
+#endif
 
 // IRP list which has pending status
 // this structure is also used to store event notification IRP
@@ -415,6 +433,10 @@ DRIVER_UNLOAD DokanUnload;
 DRIVER_CANCEL DokanEventCancelRoutine;
 
 DRIVER_CANCEL DokanIrpCancelRoutine;
+
+VOID DokanOplockComplete(IN PVOID Context, IN PIRP Irp);
+
+VOID DokanPrePostIrp(IN PVOID Context, IN PIRP Irp);
 
 DRIVER_DISPATCH DokanRegisterPendingIrpForEvent;
 
