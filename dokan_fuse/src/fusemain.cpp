@@ -107,7 +107,7 @@ int impl_fuse_context::do_open_dir(LPCWSTR FileName,
                                    PDOKAN_FILE_INFO DokanFileInfo) {
   if (ops_.opendir) {
     std::string fname = unixify(wchar_to_utf8_cstr(FileName));
-    std::auto_ptr<impl_file_handle> file;
+    std::unique_ptr<impl_file_handle> file;
     // TODO access_mode
     CHECKED(file_locks.get_file(
         fname, true, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -133,7 +133,7 @@ int impl_fuse_context::do_open_file(LPCWSTR FileName, DWORD share_mode,
   std::string fname = unixify(wchar_to_utf8_cstr(FileName));
   CHECKED(check_and_resolve(&fname));
 
-  std::auto_ptr<impl_file_handle> file;
+  std::unique_ptr<impl_file_handle> file;
   CHECKED(file_locks.get_file(fname, false, Flags, share_mode, file));
 
   fuse_file_info finfo = {0};
@@ -208,7 +208,7 @@ int impl_fuse_context::do_create_file(LPCWSTR FileName, DWORD Disposition,
     return do_open_file(FileName, share_mode, Flags, DokanFileInfo);
   }
 
-  std::auto_ptr<impl_file_handle> file;
+  std::unique_ptr<impl_file_handle> file;
   CHECKED(file_locks.get_file(fname, false, Flags, share_mode, file));
 
   fuse_file_info finfo = {0};
@@ -397,7 +397,9 @@ int impl_fuse_context::cleanup(LPCWSTR file_name,
   // The one way to solve this is to keep a table of files 'still in flight'
   // and block until the file is closed. We're not doing this yet.
 
-  if (dokan_file_info->Context) {
+  // No context for directories when ops_.opendir is not set
+  if (dokan_file_info->Context
+    || (dokan_file_info->IsDirectory && !ops_.opendir)) {
     if (dokan_file_info->DeleteOnClose) {
       close_file(file_name, dokan_file_info);
       if (dokan_file_info->IsDirectory) {
@@ -939,7 +941,7 @@ static DWORD required_share(DWORD access_mode) {
 
 int impl_file_locks::get_file(const std::string &name, bool is_dir,
                               DWORD access_mode, DWORD shared_mode,
-                              std::auto_ptr<impl_file_handle> &file) {
+                              std::unique_ptr<impl_file_handle> &file) {
   int res = 0;
   file.reset(new impl_file_handle(is_dir, shared_mode));
 

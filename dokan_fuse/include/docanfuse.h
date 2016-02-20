@@ -4,7 +4,7 @@
 #include <string>
 
 #define FUSE_THREAD_COUNT 10
-#define DOKAN_DLL L"dokan.dll"
+#define DOKAN_DLL L"dokan" DOKAN_MAJOR_API_VERSION L".dll"
 
 struct fuse_config 
 {
@@ -45,7 +45,7 @@ private:
 struct fuse
 {
 	bool within_loop;
-	std::auto_ptr<fuse_chan> ch;
+	std::unique_ptr<fuse_chan> ch;
 	fuse_session sess;
 	fuse_config conf;
 
