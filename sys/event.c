@@ -453,6 +453,7 @@ DokanEventStart(__in PDEVICE_OBJECT DeviceObject, __in PIRP Irp) {
   ULONG deviceNamePos;
   BOOLEAN useMountManager = FALSE;
   BOOLEAN mountGlobally = TRUE;
+  BOOLEAN fileLockUserMode = FALSE;
 
   DDbgPrint("==> DokanEventStart\n");
 
@@ -516,6 +517,11 @@ DokanEventStart(__in PDEVICE_OBJECT DeviceObject, __in PIRP Irp) {
     mountGlobally = FALSE;
   }
 
+  if (eventStart.Flags & DOKAN_EVENT_FILELOCK_USER_MODE) {
+	DDbgPrint("  FileLock in User Mode\n");
+	fileLockUserMode = TRUE;
+  }
+
   baseGuid.Data2 = (USHORT)(dokanGlobal->MountId & 0xFFFF) ^ baseGuid.Data2;
   baseGuid.Data3 = (USHORT)(dokanGlobal->MountId >> 16) ^ baseGuid.Data3;
 
@@ -536,13 +542,16 @@ DokanEventStart(__in PDEVICE_OBJECT DeviceObject, __in PIRP Irp) {
   status = DokanCreateDiskDevice(
       DeviceObject->DriverObject, dokanGlobal->MountId, eventStart.MountPoint,
       eventStart.UNCName, baseGuidString, dokanGlobal, deviceType,
-      deviceCharacteristics, mountGlobally, useMountManager, &dcb);
+      deviceCharacteristics, useMountManager, &dcb);
 
   if (!NT_SUCCESS(status)) {
     ExReleaseResourceLite(&dokanGlobal->Resource);
     KeLeaveCriticalRegion();
     return status;
   }
+
+  dcb->MountGlobally = mountGlobally;
+  dcb->FileLockInUserMode = fileLockUserMode;
 
   DDbgPrint("  MountId:%d\n", dcb->MountId);
   driverInfo->DeviceNumber = dokanGlobal->MountId;

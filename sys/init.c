@@ -742,8 +742,7 @@ DokanCreateDiskDevice(__in PDRIVER_OBJECT DriverObject, __in ULONG MountId,
                       __in PWCHAR MountPoint, __in PWCHAR UNCName,
                       __in PWCHAR BaseGuid, __in PDOKAN_GLOBAL DokanGlobal,
                       __in DEVICE_TYPE DeviceType,
-                      __in ULONG DeviceCharacteristics,
-                      __in BOOLEAN MountGlobally, __in BOOLEAN UseMountManager,
+                      __in ULONG DeviceCharacteristics,__in BOOLEAN UseMountManager,
                       __out PDokanDCB *Dcb) {
   WCHAR diskDeviceNameBuf[MAXIMUM_FILENAME_LENGTH];
   WCHAR symbolicLinkNameBuf[MAXIMUM_FILENAME_LENGTH];
@@ -853,7 +852,6 @@ DokanCreateDiskDevice(__in PDRIVER_OBJECT DriverObject, __in ULONG MountId,
   dcb->CacheManagerNoOpCallbacks.AcquireForReadAhead = &DokanNoOpAcquire;
   dcb->CacheManagerNoOpCallbacks.ReleaseFromReadAhead = &DokanNoOpRelease;
 
-  dcb->MountGlobally = MountGlobally;
   dcb->UseMountManager = UseMountManager;
   if (wcscmp(MountPoint, L"") != 0) {
     RtlStringCchCopyW(mountPointBuf, MAXIMUM_FILENAME_LENGTH,

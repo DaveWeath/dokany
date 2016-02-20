@@ -155,6 +155,14 @@ VOID DokanCompleteCleanup(__in PIRP_ENTRY IrpEntry,
 
   status = EventInfo->Status;
 
+  //
+  //  Unlock all outstanding file locks.
+  //
+  (VOID)FsRtlFastUnlockAll(&fcb->FileLock,
+	  fileObject,
+	  IoGetRequestorProcess(irp),
+	  NULL);
+
   if (fcb->Flags & DOKAN_FILE_DIRECTORY) {
     FsRtlNotifyCleanup(vcb->NotifySync, &vcb->DirNotifyList, ccb);
   }

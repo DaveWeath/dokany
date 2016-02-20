@@ -25,6 +25,8 @@ with this program. If not, see <http://www.gnu.org/licenses/>.
 NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 	NTSTATUS Status = STATUS_SUCCESS;
 	ULONG FsControlCode;
+	PDokanDCB Dcb;
+	PDokanVCB Vcb;
 	PDokanFCB Fcb;
 	PDokanCCB Ccb;
 	PFILE_OBJECT fileObject;
@@ -64,6 +66,13 @@ NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 	  DDbgPrint("    DokanOplockRequest STATUS_INVALID_PARAMETER\n");
 	  return STATUS_INVALID_PARAMETER;
 	}
+
+	Vcb = Fcb->Vcb;
+	if (Vcb == NULL || Vcb->Identifier.Type != VCB) {
+		DDbgPrint("    DokanOplockRequest STATUS_INVALID_PARAMETER\n");
+		return STATUS_INVALID_PARAMETER;
+	}
+	Dcb = Vcb->Dcb;
 
 #if (NTDDI_VERSION >= NTDDI_WIN7)
 
@@ -122,15 +131,11 @@ NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 
 			AcquiredVcb = ExAcquireResourceSharedLite(&(Fcb->Vcb->Resource), TRUE);
 			AcquiredFcb = ExAcquireResourceSharedLite(&(Fcb->Resource), TRUE);
-/*
-	Currently file lock is handled in user-mode which doesn't give use a good shared oplock behavior handling.
-	Shouldn't lock/unlock user-mode operation be removed and completely handled in kernel mode in lock.c?
-
 
 #if (NTDDI_VERSION >= NTDDI_WIN7)
-			if (FsRtlOplockIsSharedRequest(Irp)) {
+			if (!Dcb->FileLockInUserMode && FsRtlOplockIsSharedRequest(Irp)) {
 #else
-			if (FsControlCode == FSCTL_REQUEST_OPLOCK_LEVEL_2) {
+			if (!Dcb->FileLockInUserMode && FsControlCode == FSCTL_REQUEST_OPLOCK_LEVEL_2) {
 #endif
 				//
 				//  Byte-range locks are only valid on files.
@@ -142,7 +147,7 @@ NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 					//  based on current byte-range lock state.
 					//
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-					OplockCount = (ULONG)!FsRtlCheckLockForOplockRequest(Fcb->FileLock, &Fcb->AdvancedFCBHeader.AllocationSize);
+					OplockCount = (ULONG)!FsRtlCheckLockForOplockRequest(&Fcb->FileLock, &Fcb->AdvancedFCBHeader.AllocationSize);
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
 					OplockCount = (ULONG)FsRtlAreThereCurrentOrInProgressFileLocks(Fcb->FileLock);
 #else
@@ -151,13 +156,10 @@ NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 				}
 			}
 			else {
-
-				OplockCount = Fcb->UncleanCount;
-			}*/
-
-			  // Shouldn't be something like UncleanCount counter and not FileCount here?
-			  OplockCount = Fcb->FileCount;
+				// Shouldn't be something like UncleanCount counter and not FileCount here?
+				OplockCount = Fcb->FileCount;
 			}
+		}
 		else if ((FsControlCode == FSCTL_OPLOCK_BREAK_ACKNOWLEDGE) ||
 			(FsControlCode == FSCTL_OPBATCH_ACK_CLOSE_PENDING) ||
 			(FsControlCode == FSCTL_OPLOCK_BREAK_NOTIFY) ||
@@ -172,7 +174,6 @@ NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 #if (NTDDI_VERSION >= NTDDI_WIN7)
 		}
 		else if (FsControlCode == FSCTL_REQUEST_OPLOCK) {
-
 			//
 			//  The caller didn't provide either REQUEST_OPLOCK_INPUT_FLAG_REQUEST or
 			//  REQUEST_OPLOCK_INPUT_FLAG_ACK on the input buffer.

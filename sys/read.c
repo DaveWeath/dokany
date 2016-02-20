@@ -153,6 +153,7 @@ Return Value:
       __leave;
     }
 
+
     // length of EventContext is sum of file name length and itself
     eventLength = sizeof(EVENT_CONTEXT) + fcb->FileName.Length;
 
@@ -190,6 +191,36 @@ Return Value:
     eventContext->Operation.Read.FileNameLength = fcb->FileName.Length;
     RtlCopyMemory(eventContext->Operation.Read.FileName, fcb->FileName.Buffer,
                   fcb->FileName.Length);
+
+	//
+	//  We now check whether we can proceed based on the state of
+	//  the file oplocks.  
+	//
+	if (!FlagOn(Irp->Flags, IRP_PAGING_IO)) {
+		status = FsRtlCheckOplock(DokanGetFcbOplock(fcb),
+			Irp,
+			eventContext,
+			DokanOplockComplete,
+			DokanPrePostIrp);
+
+		//
+		//  if FsRtlCheckOplock returns STATUS_PENDING the IRP has been posted
+		//  to service an oplock break and we need to leave now.
+		//
+		if (status == STATUS_PENDING) {
+			DDbgPrint("   FsRtlCheckOplock returned STATUS_PENDING\n");
+			__leave;
+		}
+
+		//
+		// We have to check for read access according to the current
+		// state of the file locks, and set FileSize from the Fcb.
+		//
+		if (!FsRtlCheckLockForReadAccess(&fcb->FileLock, Irp)) {
+			status = STATUS_FILE_LOCK_CONFLICT;
+			__leave;
+		}
+	}
 
     // register this IRP to pending IPR list and make it pending status
     status = DokanRegisterPendingIrp(DeviceObject, Irp, eventContext, 0);
