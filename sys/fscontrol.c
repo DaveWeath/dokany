@@ -149,9 +149,9 @@ NTSTATUS DokanOplockRequest(__in PIRP* pIrp) {
 #if (NTDDI_VERSION >= NTDDI_WIN8)
 					OplockCount = (ULONG)!FsRtlCheckLockForOplockRequest(&Fcb->FileLock, &Fcb->AdvancedFCBHeader.AllocationSize);
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
-					OplockCount = (ULONG)FsRtlAreThereCurrentOrInProgressFileLocks(Fcb->FileLock);
+					OplockCount = (ULONG)FsRtlAreThereCurrentOrInProgressFileLocks(&Fcb->FileLock);
 #else
-					OplockCount = (ULONG)FsRtlAreThereCurrentFileLocks(Fcb->FileLock);
+					OplockCount = (ULONG)FsRtlAreThereCurrentFileLocks(&Fcb->FileLock);
 #endif
 				}
 			}
