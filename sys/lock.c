@@ -137,6 +137,7 @@ DokanDispatchLock(__in PDEVICE_OBJECT DeviceObject, __in PIRP Irp) {
   PDokanDCB dcb;
   PEVENT_CONTEXT eventContext;
   ULONG eventLength;
+  BOOLEAN completeIrp = TRUE;
 
   __try {
     DDbgPrint("==> DokanLock\n");
@@ -217,11 +218,14 @@ DokanDispatchLock(__in PDEVICE_OBJECT DeviceObject, __in PIRP Irp) {
 	  status = DokanRegisterPendingIrp(DeviceObject, Irp, eventContext, 0);
 	} else {
 	  status = DokanCommonLockControl(Irp, eventContext);
+	  completeIrp = FALSE;
 	}
 
   } __finally {
 
-    DokanCompleteIrpRequest(Irp, status, 0);
+    if (completeIrp) {
+      DokanCompleteIrpRequest(Irp, status, 0);
+	}
 
     DDbgPrint("<== DokanLock\n");
   }
