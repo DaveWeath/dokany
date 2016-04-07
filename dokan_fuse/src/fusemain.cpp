@@ -80,8 +80,8 @@ impl_fuse_context::impl_fuse_context(const struct fuse_operations *ops,
 {
   // Reset connection info
   memset(&conn_info_, 0, sizeof(fuse_conn_info));
-  conn_info_.max_write = ULONG_MAX;
-  conn_info_.max_readahead = ULONG_MAX;
+  conn_info_.max_write = UINT_MAX;
+  conn_info_.max_readahead = UINT_MAX;
   conn_info_.proto_major = FUSE_MAJOR_VERSION;
   conn_info_.proto_minor = FUSE_MINOR_VERSION;
 
@@ -218,6 +218,7 @@ int impl_fuse_context::do_create_file(LPCWSTR FileName, DWORD Disposition,
 
   CHECKED(ops_.create(fname.c_str(), filemask_, &finfo));
 
+  file->set_finfo(finfo);
   DokanFileInfo->Context = reinterpret_cast<ULONG64>(file.release());
   return 0;
 }

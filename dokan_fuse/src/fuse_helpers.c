@@ -10,6 +10,8 @@
 #include <errno.h>
 
 #ifdef __CYGWIN__
+#define _BSD_SOURCE
+#include <unistd.h>
 #include <semaphore.h>
 #endif
 
@@ -262,7 +264,7 @@ void fuse_remove_signal_handlers(struct fuse_session *se)
 
 int my_sem_init(sem_t *sem, int pshared, int initial)
 {
-	*sem=CreateSemaphore (NULL, initial, LONG_MAX, NULL);
+	*sem=(sem_t)CreateSemaphore (NULL, initial, SEM_VALUE_MAX, NULL);
 	return *sem==NULL?-1:0;
 }
 

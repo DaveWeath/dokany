@@ -21,9 +21,9 @@ with this program. If not, see <http://www.gnu.org/licenses/>.
 
 #include "dokani.h"
 #include <Dbt.h>
+#include <Shlobj.h>
 #include <stdio.h>
 #include <windows.h>
-#include <Shlobj.h>
 
 typedef struct _REPARSE_DATA_BUFFER {
   ULONG ReparseTag;
@@ -230,11 +230,11 @@ BOOL DOKANAPI DokanUnmount(WCHAR DriveLetter) {
 }
 
 #define DOKAN_NP_SERVICE_KEY                                                   \
-  L"System\\CurrentControlSet\\Services\\Dokan" DOKAN_MAJOR_API_VERSION
+  L"System\\CurrentControlSet\\Services\\dokan" DOKAN_MAJOR_API_VERSION
 #define DOKAN_NP_DEVICE_NAME                                                   \
   L"\\Device\\DokanRedirector" DOKAN_MAJOR_API_VERSION
-#define DOKAN_NP_NAME L"DokanNP" DOKAN_MAJOR_API_VERSION
-#define DOKAN_NP_PATH L"System32\\dokannp" DOKAN_MAJOR_API_VERSION L".dll"
+#define DOKAN_NP_NAME L"Dokan" DOKAN_MAJOR_API_VERSION
+#define DOKAN_BINARY_NAME L"dokannp" DOKAN_MAJOR_API_VERSION L".dll"
 #define DOKAN_NP_ORDER_KEY                                                     \
   L"System\\CurrentControlSet\\Control\\NetworkProvider\\Order"
 
@@ -245,8 +245,22 @@ BOOL DOKANAPI DokanNetworkProviderInstall() {
   WCHAR commanp[64];
   WCHAR buffer[1024];
   DWORD buffer_size = sizeof(buffer);
+  WCHAR pBuf[MAX_PATH];
+
   ZeroMemory(&buffer, sizeof(buffer));
   ZeroMemory(commanp, sizeof(commanp));
+
+  int length = GetModuleFileName(NULL, pBuf, MAX_PATH);
+  if (length == 0) {
+    DokanDbgPrintW(
+        L"DokanNetworkProviderInstall: GetModuleFileName failed %d\n",
+        GetLastError());
+    return FALSE;
+  }
+
+  while (length >= 0 && pBuf[length] != '\\')
+    pBuf[length--] = '\0';
+  wcscat_s(pBuf, sizeof(pBuf) / sizeof(WCHAR), DOKAN_BINARY_NAME);
 
   RegCreateKeyEx(HKEY_LOCAL_MACHINE, DOKAN_NP_SERVICE_KEY L"\\NetworkProvider",
                  0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &key,
@@ -258,8 +272,8 @@ BOOL DOKANAPI DokanNetworkProviderInstall() {
   RegSetValueEx(key, L"Name", 0, REG_SZ, (BYTE *)DOKAN_NP_NAME,
                 (DWORD)(wcslen(DOKAN_NP_NAME) + 1) * sizeof(WCHAR));
 
-  RegSetValueEx(key, L"ProviderPath", 0, REG_SZ, (BYTE *)DOKAN_NP_PATH,
-                (DWORD)(wcslen(DOKAN_NP_PATH) + 1) * sizeof(WCHAR));
+  RegSetValueEx(key, L"ProviderPath", 0, REG_SZ, (BYTE *)pBuf,
+                (DWORD)(wcslen(pBuf) + 1) * sizeof(WCHAR));
 
   RegCloseKey(key);
 
@@ -418,6 +432,46 @@ BOOL DeleteMountPoint(LPCWSTR MountPoint) {
   return result;
 }
 
+void DokanBroadcastLink(WCHAR cLetter, BOOL bRemoved) {
+  DWORD receipients;
+  DWORD device_event;
+  DEV_BROADCAST_VOLUME params;
+  WCHAR drive[4] = L"C:\\";
+  LONG wEventId;
+
+  if (!isalpha(cLetter)) {
+    DbgPrint("DokanBroadcastLink: invalid parameter\n");
+    return;
+  }
+
+  receipients = BSM_APPLICATIONS;
+  device_event = bRemoved ? DBT_DEVICEREMOVECOMPLETE : DBT_DEVICEARRIVAL;
+
+  ZeroMemory(&params, sizeof(params));
+  params.dbcv_size = sizeof(params);
+  params.dbcv_devicetype = DBT_DEVTYP_VOLUME;
+  params.dbcv_reserved = 0;
+  params.dbcv_unitmask = (1 << (toupper(cLetter) - 'A'));
+  params.dbcv_flags = 0;
+
+  if (BroadcastSystemMessage(
+          BSF_NOHANG | BSF_FORCEIFHUNG | BSF_NOTIMEOUTIFNOTHUNG, &receipients,
+          WM_DEVICECHANGE, device_event, (LPARAM)&params) <= 0) {
+
+    DbgPrint("DokanBroadcastLink: BroadcastSystemMessage failed - %d\n",
+             GetLastError());
+  }
+
+  // Cannot SHChangeNotify during DLL_PROCESS_DETACH cannot
+  // ole32.dll is probably already unload
+  if (bRemoved)
+    return;
+
+  drive[0] = towupper(cLetter);
+  wEventId = bRemoved ? SHCNE_DRIVEREMOVED : SHCNE_DRIVEADD;
+  SHChangeNotify(wEventId, SHCNF_PATH, drive, NULL);
+}
+
 BOOL DokanMount(LPCWSTR MountPoint, LPCWSTR DeviceName,
                 PDOKAN_OPTIONS DokanOptions) {
   UNREFERENCED_PARAMETER(DokanOptions);
@@ -429,19 +483,10 @@ BOOL DokanMount(LPCWSTR MountPoint, LPCWSTR DeviceName,
       // In that case we cannot use mount manager ; doesn't this should be done
       // kernel-mode too?
       return CreateMountPoint(MountPoint, DeviceName);
-	} else {
-	  // Notify applications / explorer
-	  WCHAR drive[4] = L"C:\\";
-	  DEV_BROADCAST_VOLUME hdr;
-	  ZeroMemory(&hdr, sizeof(DEV_BROADCAST_VOLUME));
-	  hdr.dbcv_devicetype = DBT_DEVTYP_VOLUME;
-	  hdr.dbcv_flags &= DBTF_MEDIA;
-	  hdr.dbcv_unitmask = 0xffffffff;
-	  drive[0] = MountPoint[0];
-
-	  SendMessageTimeout(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, (LPARAM)(&hdr), SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1000, NULL);
-	  SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATH, drive, NULL);
-	}
+    } else {
+      // Notify applications / explorer
+      DokanBroadcastLink(MountPoint[0], FALSE);
+    }
   }
   return TRUE;
 }
@@ -471,23 +516,13 @@ BOOL DOKANAPI DokanRemoveMountPoint(LPCWSTR MountPoint) {
             // FSCTL_DELETE_REPARSE_POINT with DeleteMountPoint function)
             DeleteVolumeMountPoint(mountPoint);
           }
-		} else {
-			// Notify applications / explorer
-			WCHAR drive[4] = L"C:\\";
-			DEV_BROADCAST_VOLUME hdr;
-			ZeroMemory(&hdr, sizeof(DEV_BROADCAST_VOLUME));
-			hdr.dbcv_devicetype = DBT_DEVTYP_VOLUME;
-			hdr.dbcv_flags &= DBTF_MEDIA;
-			hdr.dbcv_unitmask = 0xffffffff;
-			drive[0] = MountPoint[0];
-
-			SendMessageTimeout(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEREMOVECOMPLETE, (LPARAM)(&hdr), SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1000, NULL);
-			SHChangeNotify(SHCNE_DRIVEREMOVED, SHCNF_PATH, drive, NULL);
-		}
-        return TRUE;
+        } else {
+          // Notify applications / explorer
+          DokanBroadcastLink(MountPoint[0], TRUE);
+          return TRUE;
+        }
       }
     }
   }
-
   return FALSE;
 }

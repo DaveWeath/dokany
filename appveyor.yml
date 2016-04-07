@@ -5,50 +5,63 @@
     CoverityNotificationEmail:
       secure: 0SPcT7MZEWl9NsqpKSOoLBCfqx/KVDAte5+xvbRremg=
     global:
-      CYG_ROOT: C:\cygwin
+      CYG_INSTALLER: setup-x86.exe
       CYG_MIRROR: http://cygwin.mirror.constant.com
+      CYG_ROOT: C:\cygwin
       CYG_CACHE: C:\cygwin\var\cache\setup
       CYG_BASH: C:\cygwin\bin\bash
+      CYG64_INSTALLER: setup-x86_64.exe
+      CYG64_ROOT: C:\cygwin64
+      CYG64_BASH: C:\cygwin64\bin\bash
+      CYG64_CACHE: C:\cygwin64\var\cache\setup
+      MSYS2_LOG_FILE: C:/Users/appveyor/msys2output.log
 
   os: Visual Studio 2015
   version: 1.0.0-{build}
   configuration:
-  - Release
-  - Win7 Release
-  - Win8 Release
-  - Win8.1 Release
-  - Win10 Release
+  - All
   - Coverity
-  - WiX
-  - Cygwin
+  - FsTest
   platform:
-  - Win32
   - x64
   
   cache:
-    - '%CYG_CACHE%'
-    
+  - '%CYG_CACHE%'
+  - '%CYG64_CACHE%'
+
+  init:
+    - cmd: 'IF "%PLATFORM%" == "x86" (set MSYS2_PATH=C:\\msys64\\mingw32_shell.bat) ELSE (set MSYS2_PATH=C:\\msys64\\mingw64_shell.bat)'
+
   install:
-  - ps: |
-      if (!($env:CONFIGURATION -eq "Cygwin") -or !($env:PLATFORM -eq "x64")) {
-        return;
-      }
-  
-      'Start-FileDownload "https://cygwin.com/setup-x86.exe" -FileName "setup-x86.exe"'
-      & 'setup-x86.exe --quiet-mode --no-shortcuts --no-startmenu --no-desktop --upgrade-also --only-site --root "%CYG_ROOT%" --site "%CYG_MIRROR%" --local-package-dir "%CYG_CACHE%" --packages cmake,make,gcc-core,gcc-g++,mingw-runtime,mingw-binutils,mingw-gcc-core,mingw-gcc-g++,mingw-pthreads,mingw-w32api > NUL 2>&1'
-      & '%CYG_BASH% -lc "cygcheck -dc cygwin"'
+    - ps: |
+        if ($env:CONFIGURATION -eq "All") {
+          Start-FileDownload "https://cygwin.com/setup-x86.exe" -FileName "setup-x86.exe"
+          Start-FileDownload "https://cygwin.com/setup-x86_64.exe" -FileName "setup-x86_64.exe"
+        }
+
+    - 'IF "%CONFIGURATION%" == "All" ( %CYG_INSTALLER% --quiet-mode --no-shortcuts --no-startmenu --no-desktop --upgrade-also --only-site --root "%CYG_ROOT%" --site "%CYG_MIRROR%" --local-package-dir "%CYG_CACHE%" --packages cmake,make,gcc-core,gcc-g++,mingw-runtime,mingw-binutils,mingw-gcc-core,mingw-gcc-g++,mingw-pthreads,mingw-w32api > NUL 2>&1 
+      && %CYG_BASH% -lc "cygcheck -dc cygwin" ) '
+    - 'IF "%CONFIGURATION%" == "All" ( %CYG64_INSTALLER% --quiet-mode --no-shortcuts --no-startmenu --no-desktop --upgrade-also --only-site --root "%CYG64_ROOT%" --site "%CYG_MIRROR%" --local-package-dir "%CYG64_CACHE%" --packages cmake,make,gcc-core,gcc-g++,mingw-runtime,mingw-binutils,mingw-gcc-core,mingw-gcc-g++,mingw-pthreads,mingw-w32api > NUL 2>&1 
+      && %CYG64_BASH% -lc "cygcheck -dc cygwin" ) '
+    - 'IF "%CONFIGURATION%" == "All" ( C:\msys64\usr\bin\pacman --sync --refresh --refresh --needed --noconfirm msys2-runtime msys2-runtime-devel bash pacman pacman-mirrors 
+      && C:\msys64\usr\bin\pacman --noconfirm --sync pacman-mirrors && C:\msys64\usr\bin\pacman -Syu --noconfirm ) '
+      # C:\msys64\usr\bin\pacman -S mingw-w64-i686-gcc mingw-w64-x86_64-gcc mingw-w64-i686-cmake mingw-w64-x86_64-cmake make --noconfirm
+    - ps: |
+        if ($env:CONFIGURATION -eq "FsTest") {
+          & Bcdedit.exe -set TESTSIGNING ON;
+          echo "Before reboot";
+          Restart-Computer -Force;
+          Start-Sleep -s 10;
+        }
 
   build_script:
   - ps: |
-      if ($env:CONFIGURATION -eq "Cygwin") {
-        return;
-      }
-
+      Write-Host Start building...
       $buildCmd = "C:\Program Files (x86)\MSBuild\14.0\Bin\MSBuild.exe"
 
       if ($env:CONFIGURATION -eq "Coverity") {
         
-        if (!($env:PLATFORM -eq "Win32") -or "$env:APPVEYOR_PULL_REQUEST_TITLE" -or !($env:APPVEYOR_REPO_BRANCH -eq 'master')) {
+        if ("$env:APPVEYOR_PULL_REQUEST_TITLE" -or !($env:APPVEYOR_REPO_BRANCH -eq 'master')) {
           return;
         }
         
@@ -81,12 +94,8 @@
         -d "Appveyor build." `
         --codeVersion "$env:APPVEYOR_BUILD_VERSION"
       
-      } elseif ($env:CONFIGURATION -eq "WiX") {
-        
-        if (!($env:PLATFORM -eq "Win32") -or "$env:APPVEYOR_PULL_REQUEST_TITLE") {
-          return;
-        }
-        
+      } elseif ($env:CONFIGURATION -eq "All") {
+
         $env:Path = $env:Path + ";C:\Program Files (x86)\WiX Toolset v3.10"
         
         & .\build.bat
@@ -102,18 +111,40 @@
         "/p:Platform=${Platform}")
         
         & $buildCmd $buildArgs
-      } else {
+      } elseif ($env:CONFIGURATION -eq "FsTest") {
+        
         $buildArgs = @(
         "/m",
         "/l:C:\Program Files\AppVeyor\BuildAgent\Appveyor.MSBuildLogger.dll",
-        "/p:Configuration=$env:CONFIGURATION",
+        "/p:Configuration=Win10 Debug",
         "/p:Platform=$env:PLATFORM")
         
         & $buildCmd $buildArgs
+
+        $certMgr = "C:\Program Files (x86)\Windows Kits\10\bin\x64\certmgr.exe"
+        & $certMgr /add x64\Win10Debug\dokan1.cer /s /r localMachine root
+        & $certMgr /add x64\Win10Debug\dokan1.cer /s /r localMachine trustedpublisher
+        
+        cp .\x64\Win10Debug\dokan1.sys C:\Windows\System32\drivers\
+        & .\x64\Debug\dokanctl.exe /i d
+        & .\x64\Debug\dokanctl.exe /i n
+        $app = Start-Process -passthru .\x64\Debug\mirror.exe -ArgumentList "/r C:\TMP /l m"
+        Start-Sleep -s 5
+        
+        git clone https://github.com/Liryna/winfstest.git
+        $buildArgs = @(
+        ".\winfstest\winfstest.sln",
+        "/m",
+        "/l:C:\Program Files\AppVeyor\BuildAgent\Appveyor.MSBuildLogger.dll",
+        "/p:Configuration=Debug",
+        "/p:Platform=$env:PLATFORM")
+        
+        New-Item C:\TMP -type directory
+        & $buildCmd $buildArgs
+        & .\winfstest\TestSuite\run-winfstest.bat M:\
+
+        Start-Sleep -s 5
+        Stop-Process $app.Id
       }
-  - ps: |
-      if (!($env:CONFIGURATION -eq "Cygwin") -or !($env:PLATFORM -eq "x64")) {
-        return;
-      }
-      & '%CYG_BASH% -lc "cd $APPVEYOR_BUILD_FOLDER/dokan_fuse/; exec 0</dev/null;cmake .;make"'
-      & '%CYG_BASH% -lc "cd $APPVEYOR_BUILD_FOLDER/samples/fuse_mirror/; exec 0</dev/null;gcc fusexmp.c -I../../dokan_fuse/include -D_FILE_OFFSET_BITS=64 -L../../dokan_fuse -lcygdokanfuse1"'
+      Write-Host Build Finished !
+

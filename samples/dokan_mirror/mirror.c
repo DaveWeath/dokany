@@ -1,7 +1,7 @@
 /*
   Dokan : user-mode file system library for Windows
 
-  Copyright (C) 2015 - 2016 Adrien J. <liryna.stark@gmail.com> and Maxime C.
+  Copyright (C) 2015 - 2016 Adrien J. <liryna.stark@gmail.com> and Maxime C. <maxime@islog.com>
   Copyright (C) 2007 - 2011 Hiroki Asakawa <info@dokan-dev.net>
 
   http://dokan-dev.github.io
@@ -140,8 +140,12 @@ NTSTATUS ToNtStatus(DWORD dwError) {
     return STATUS_PRIVILEGE_NOT_HELD;
   case ERROR_NOT_READY:
     return STATUS_DEVICE_NOT_READY;
+  case ERROR_DIRECTORY:
+    return STATUS_NOT_A_DIRECTORY;
+  case ERROR_HANDLE_EOF:
+    return STATUS_END_OF_FILE;
   default:
-    DbgPrint(L"Create got unknown error code %d\n", dwError);
+    DbgPrint(L"Unknown error code %d\n", dwError);
     return STATUS_ACCESS_DENIED;
   }
 }
@@ -351,9 +355,9 @@ MirrorCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 
     if (status == STATUS_SUCCESS) {
       // FILE_FLAG_BACKUP_SEMANTICS is required for opening directory handles
-      handle = CreateFileW(filePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           &securityAttrib, OPEN_EXISTING,
-                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+      handle = CreateFile(filePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          &securityAttrib, OPEN_EXISTING,
+                          FILE_FLAG_BACKUP_SEMANTICS, NULL);
 
       if (handle == INVALID_HANDLE_VALUE) {
         error = GetLastError();
@@ -369,15 +373,10 @@ MirrorCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
     // It is a create file request
 
     if (fileAttr != INVALID_FILE_ATTRIBUTES &&
-        (fileAttr & FILE_ATTRIBUTE_DIRECTORY)) {
-      if (CreateDisposition == FILE_CREATE) {
-        return STATUS_OBJECT_NAME_COLLISION; // File already exist because
-                                             // GetFileAttributes found it
-      } else {
-        handle = CreateFileW(filePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                             &securityAttrib, OPEN_EXISTING,
-                             FILE_FLAG_BACKUP_SEMANTICS, NULL);
-      }
+        (fileAttr & FILE_ATTRIBUTE_DIRECTORY) &&
+        CreateDisposition == FILE_CREATE) {
+      return STATUS_OBJECT_NAME_COLLISION; // File already exist because
+                                           // GetFileAttributes found it
     } else {
       handle = CreateFile(
           filePath,
@@ -742,8 +741,13 @@ MirrorDeleteFile(LPCWSTR FileName, PDOKAN_FILE_INFO DokanFileInfo) {
   // HANDLE	handle = (HANDLE)DokanFileInfo->Context;
 
   GetFilePath(filePath, MAX_PATH, FileName);
-
   DbgPrint(L"DeleteFile %s\n", filePath);
+
+  DWORD dwAttrib = GetFileAttributes(filePath);
+
+  if (dwAttrib != INVALID_FILE_ATTRIBUTES &&
+      (dwAttrib & FILE_ATTRIBUTE_DIRECTORY))
+    return STATUS_ACCESS_DENIED;
 
   return STATUS_SUCCESS;
 }
@@ -854,8 +858,8 @@ static NTSTATUS DOKAN_CALLBACK MirrorLockFile(LPCWSTR FileName,
   length.QuadPart = Length;
   offset.QuadPart = ByteOffset;
 
-  if (!LockFile(handle, offset.HighPart, offset.LowPart, length.HighPart,
-                length.LowPart)) {
+  if (!LockFile(handle, offset.LowPart, offset.HighPart, length.LowPart,
+                length.HighPart)) {
     DWORD error = GetLastError();
     DbgPrint(L"\tfailed(%d)\n", error);
     return ToNtStatus(error);
@@ -1007,8 +1011,8 @@ MirrorUnlockFile(LPCWSTR FileName, LONGLONG ByteOffset, LONGLONG Length,
   length.QuadPart = Length;
   offset.QuadPart = ByteOffset;
 
-  if (!UnlockFile(handle, offset.HighPart, offset.LowPart, length.HighPart,
-                  length.LowPart)) {
+  if (!UnlockFile(handle, offset.LowPart, offset.HighPart, length.LowPart,
+                  length.HighPart)) {
     DWORD error = GetLastError();
     DbgPrint(L"\terror code = %d\n\n", error);
     return ToNtStatus(error);
@@ -1132,6 +1136,21 @@ static NTSTATUS DOKAN_CALLBACK MirrorGetVolumeInformation(
   return STATUS_SUCCESS;
 }
 
+/*
+//Uncomment for personalize disk space
+static NTSTATUS DOKAN_CALLBACK MirrorDokanGetDiskFreeSpace(
+    PULONGLONG FreeBytesAvailable, PULONGLONG TotalNumberOfBytes,
+    PULONGLONG TotalNumberOfFreeBytes, PDOKAN_FILE_INFO DokanFileInfo) {
+  UNREFERENCED_PARAMETER(DokanFileInfo);
+
+  *FreeBytesAvailable = (ULONGLONG)(512 * 1024 * 1024);
+  *TotalNumberOfBytes = 9223372036854775807;
+  *TotalNumberOfFreeBytes = 9223372036854775807;
+
+  return STATUS_SUCCESS;
+}
+*/
+
 /**
  * Avoid #include <winternl.h> which as conflict with FILE_INFORMATION_CLASS
  * definition.
@@ -1214,6 +1233,21 @@ static NTSTATUS DOKAN_CALLBACK MirrorUnmounted(PDOKAN_FILE_INFO DokanFileInfo) {
   return STATUS_SUCCESS;
 }
 
+BOOL WINAPI CtrlHandler(DWORD dwCtrlType) {
+  switch (dwCtrlType) {
+  case CTRL_C_EVENT:
+  case CTRL_BREAK_EVENT:
+  case CTRL_CLOSE_EVENT:
+  case CTRL_LOGOFF_EVENT:
+  case CTRL_SHUTDOWN_EVENT:
+    SetConsoleCtrlHandler(CtrlHandler, FALSE);
+    DokanRemoveMountPoint(MountPoint);
+    return TRUE;
+  default:
+    return FALSE;
+  }
+}
+
 int __cdecl wmain(ULONG argc, PWCHAR argv[]) {
   int status;
   ULONG command;
@@ -1240,7 +1274,9 @@ int __cdecl wmain(ULONG argc, PWCHAR argv[]) {
                     "  /w (write-protect drive)\n"
                     "  /o (use mount manager)\n"
                     "  /c (mount for current session only)\n"
-                    "  /u UNC provider name"
+                    "  /u UNC provider name\n"
+                    "  /a Allocation unit size (ex. /a 512)\n"
+                    "  /k Sector size (ex. /k 512)\n"
                     "  /i (Timeout in Milliseconds ex. /i 30000)\n");
     free(dokanOperations);
     free(dokanOptions);
@@ -1302,6 +1338,14 @@ int __cdecl wmain(ULONG argc, PWCHAR argv[]) {
       command++;
       dokanOptions->Timeout = (ULONG)_wtol(argv[command]);
       break;
+    case L'a':
+      command++;
+      dokanOptions->AllocationUnitSize = (ULONG)_wtol(argv[command]);
+      break;
+    case L'k':
+      command++;
+      dokanOptions->SectorSize = (ULONG)_wtol(argv[command]);
+      break;
     default:
       fwprintf(stderr, L"unknown command: %s\n", argv[command]);
       free(dokanOperations);
@@ -1340,6 +1384,10 @@ int __cdecl wmain(ULONG argc, PWCHAR argv[]) {
     free(dokanOperations);
     free(dokanOptions);
     return -1;
+  }
+
+  if (!SetConsoleCtrlHandler(CtrlHandler, TRUE)) {
+    fwprintf(stderr, L"Control Handler is not set.\n");
   }
 
   // Add security name privilege. Required here to handle GetFileSecurity
@@ -1382,7 +1430,7 @@ int __cdecl wmain(ULONG argc, PWCHAR argv[]) {
   dokanOperations->UnlockFile = MirrorUnlockFile;
   dokanOperations->GetFileSecurity = MirrorGetFileSecurity;
   dokanOperations->SetFileSecurity = MirrorSetFileSecurity;
-  dokanOperations->GetDiskFreeSpace = NULL;
+  dokanOperations->GetDiskFreeSpace = NULL; // MirrorDokanGetDiskFreeSpace;
   dokanOperations->GetVolumeInformation = MirrorGetVolumeInformation;
   dokanOperations->Unmounted = MirrorUnmounted;
   dokanOperations->FindStreams = MirrorFindStreams;

@@ -159,6 +159,24 @@ BOOL CheckDriveLetterAvailability(WCHAR DriveLetter) {
   return TRUE;
 }
 
+void CheckAllocationUnitSectorSize(PDOKAN_OPTIONS DokanOptions) {
+  ULONG allocationUnitSize = DokanOptions->AllocationUnitSize;
+  ULONG sectorSize = DokanOptions->SectorSize;
+
+  if ((allocationUnitSize < 512 || allocationUnitSize > 65536 ||
+       (allocationUnitSize & (allocationUnitSize - 1)) != 0) // Is power of tow
+      || (sectorSize < 512 || sectorSize > 65536 ||
+          (sectorSize & (sectorSize - 1)))) { // Is power of tow
+    // Reset to default if values does not fit windows FAT/NTFS value
+    // https://support.microsoft.com/en-us/kb/140365
+    DokanOptions->SectorSize = DOKAN_DEFAULT_SECTOR_SIZE;
+    DokanOptions->AllocationUnitSize = DOKAN_DEFAULT_ALLOCATION_UNIT_SIZE;
+  }
+
+  DbgPrintW(L"AllocationUnitSize: %d SectorSize: %d\n",
+            DokanOptions->AllocationUnitSize, DokanOptions->SectorSize);
+}
+
 int DOKANAPI DokanMain(PDOKAN_OPTIONS DokanOptions,
                        PDOKAN_OPERATIONS DokanOperations) {
   ULONG threadNum = 0;
@@ -192,6 +210,8 @@ int DOKANAPI DokanMain(PDOKAN_OPTIONS DokanOptions,
         DokanOptions->Version, DOKAN_MINIMUM_COMPATIBLE_VERSION);
     return DOKAN_VERSION_ERROR;
   }
+
+  CheckAllocationUnitSectorSize(DokanOptions);
 
   if (DokanOptions->ThreadCount == 0) {
     DokanOptions->ThreadCount = 5;
@@ -323,10 +343,10 @@ GetRawDeviceName(LPCWSTR DeviceName, LPWSTR DestinationBuffer,
   return DestinationBuffer;
 }
 
-void ALIGN_ALLOCATION_SIZE(PLARGE_INTEGER size) {
-  long long r = size->QuadPart % DOKAN_ALLOCATION_UNIT_SIZE;
+void ALIGN_ALLOCATION_SIZE(PLARGE_INTEGER size, PDOKAN_OPTIONS DokanOptions) {
+  long long r = size->QuadPart % DokanOptions->AllocationUnitSize;
   size->QuadPart =
-      (size->QuadPart + (r > 0 ? DOKAN_ALLOCATION_UNIT_SIZE - r : 0));
+      (size->QuadPart + (r > 0 ? DokanOptions->AllocationUnitSize - r : 0));
 }
 
 UINT WINAPI DokanLoop(PDOKAN_INSTANCE DokanInstance) {
@@ -753,6 +773,35 @@ BOOL SendToDevice(LPCWSTR DeviceName, DWORD IoControlCode, PVOID InputBuffer,
   }
 
   return TRUE;
+}
+
+BOOL DOKANAPI DokanGetMountPointList(PDOKAN_CONTROL list, ULONG length,
+                                     BOOL uncOnly, PULONG nbRead) {
+  ULONG returnedLength = 0;
+
+  DOKAN_CONTROL dokanControl[DOKAN_MAX_INSTANCES];
+  ZeroMemory(dokanControl, sizeof(dokanControl));
+  *nbRead = 0;
+
+  if (SendToDevice(DOKAN_GLOBAL_DEVICE_NAME, IOCTL_EVENT_MOUNTPOINT_LIST, NULL,
+                   0, dokanControl, sizeof(dokanControl), &returnedLength)) {
+    for (int i = 0; i < DOKAN_MAX_INSTANCES; ++i) {
+      if (wcscmp(dokanControl[i].DeviceName, L"") == 0) {
+        break;
+      }
+      if (!uncOnly || wcscmp(dokanControl[i].UNCName, L"") != 0) {
+        if (length < ((*nbRead) + 1))
+          return TRUE;
+
+        CopyMemory(&list[*nbRead], &dokanControl[i], sizeof(DOKAN_CONTROL));
+        (*nbRead)++;
+      }
+    }
+
+    return TRUE;
+  }
+
+  return FALSE;
 }
 
 BOOL WINAPI DllMain(HINSTANCE Instance, DWORD Reason, LPVOID Reserved) {
